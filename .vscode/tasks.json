@@ -4,12 +4,18 @@
 		{
 			"label": "build-run",
 			"type": "shell",
-			"command": "odin run . -debug",
+			"command": "odin run example",
 			"problemMatcher": [],
 			"group": {
 				"kind": "build",
 				"isDefault": true
 			}
+		},
+		{
+			"label": "build-debug",
+			"type": "shell",
+			"command": "odin build example -debug",
+			"problemMatcher": [],
 		}
 	]
 }

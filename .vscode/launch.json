@@ -5,9 +5,10 @@
 			"name": "Launch",
 			"type": "cppvsdbg",
 			"request": "launch",
-			"program": "${workspaceFolder}/odin-playground.exe",
+			"program": "${workspaceFolder}/example.exe",
 			"args": [],
 			"cwd": "${fileDirname}",
+			"preLaunchTask": "build-debug"
 		}
 	]
 }

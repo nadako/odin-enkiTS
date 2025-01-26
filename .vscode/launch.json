@@ -1,0 +1,13 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Launch",
+			"type": "cppvsdbg",
+			"request": "launch",
+			"program": "${workspaceFolder}/odin-playground.exe",
+			"args": [],
+			"cwd": "${fileDirname}",
+		}
+	]
+}

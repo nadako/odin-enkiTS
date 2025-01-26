@@ -1,62 +1,24 @@
 package enki
 
-// TODO: review types, use b32 or something for boolean ints
-// TODO: review doc, adjust naming
-// TODO: port tests, run on CI, all that stuff
-
 import "core:c"
 
-// TODO: other platforms, add build scripts too
-foreign import enki "enki.lib"
-
-NO_THREAD_NUM: u32 : 0xFFFFFFFF
+foreign import enki "enki.lib" // TODO: add mac/linux
 
 TaskScheduler :: struct {}
-
 TaskSet :: struct {}
-
 PinnedTask :: struct {}
-
 Completable :: struct {}
-
 Dependency :: struct {}
-
 CompletionAction :: struct {}
+
+NO_THREAD_NUM: u32 : 0xFFFFFFFF
 
 TaskExecuteRange :: proc "c" (start, end, threadnum: u32, args: rawptr)
 PinnedTaskExecute :: proc "c" (args: rawptr)
 CompletionFunction :: proc "c" (args: rawptr, threadnum: u32)
 
-ParamsPinnedTask :: struct {
-	args:     rawptr,
-	priority: c.int,
-}
-
-ParamsTaskSet :: struct {
-	args:     rawptr,
-	setSize:  u32,
-	minRange: u32,
-	priority: c.int,
-}
-
-ParamsCompletionAction :: struct {
-	argsPreComplete:  rawptr,
-	argsPostComplete: rawptr,
-	dependency:       ^Completable, // task which when complete triggers completion function
-}
-
-AllocFunc :: proc "c" (align: c.size_t, size: c.size_t, userData: rawptr, file: cstring, line: c.int) -> rawptr
-FreeFunc :: proc "c" (ptr: rawptr, size: c.size_t, userData: rawptr, file: cstring, line: c.int)
-
-CustomAllocator :: struct {
-	alloc:    AllocFunc,
-	free:     FreeFunc,
-	userData: rawptr,
-}
-
 // TaskScheduler implements several callbacks intended for profilers
 ProfilerCallbackFunc :: proc "c" (threadnum: u32)
-
 ProfilerCallbacks :: struct {
 	threadStart:                     ProfilerCallbackFunc,
 	threadStop:                      ProfilerCallbackFunc,
@@ -66,6 +28,33 @@ ProfilerCallbacks :: struct {
 	waitForTaskCompleteStop:         ProfilerCallbackFunc, // thread stopped waiting
 	waitForTaskCompleteSuspendStart: ProfilerCallbackFunc, // thread suspended waiting task completion
 	waitForTaskCompleteSuspendStop:  ProfilerCallbackFunc, // thread unsuspended
+}
+
+// Custom allocator, set in TaskSchedulerConfig. Also see ENKI_CUSTOM_ALLOC_FILE_AND_LINE for file_ and line_
+AllocFunc :: proc "c" (align: c.size_t, size: c.size_t, userData: rawptr, file: cstring, line: c.int) -> rawptr
+FreeFunc :: proc "c" (ptr: rawptr, size: c.size_t, userData: rawptr, file: cstring, line: c.int)
+CustomAllocator :: struct {
+	alloc:    AllocFunc,
+	free:     FreeFunc,
+	userData: rawptr,
+}
+
+ParamsTaskSet :: struct {
+	args:     rawptr,
+	setSize:  u32,
+	minRange: u32,
+	priority: c.int,
+}
+
+ParamsPinnedTask :: struct {
+	args:     rawptr,
+	priority: c.int,
+}
+
+ParamsCompletionAction :: struct {
+	argsPreComplete:  rawptr,
+	argsPostComplete: rawptr,
+	dependency:       ^Completable, // task which when complete triggers completion function
 }
 
 // TaskSchedulerConfig - configuration struct for advanced Initialize
@@ -99,22 +88,27 @@ foreign enki {
 	// This will use the custom allocator to allocate the task scheduler struct
 	// and additionally will set the custom allocator in TaskSchedulerConfig of the task scheduler
 	NewTaskSchedulerWithCustomAllocator :: proc(customAllocator: CustomAllocator) -> ^TaskScheduler ---
-	// TODO: why this doesn't work?
 
 	// Get config. Can be called before InitTaskSchedulerWithConfig to get the defaults
 	GetTaskSchedulerConfig :: proc(ts: ^TaskScheduler) -> TaskSchedulerConfig ---
 
-	// for !GetIsShutdownRequested() {} can be used in tasks which loop, to check if enkiTS has been requested to shutdown.
+	// DEPRECATED: use GetIsShutdownRequested() instead of GetIsRunning() in external code
+	// for GetIsRunning(ts) {} can be used in tasks which loop, to check if enkiTS has been shutdown.
+	// If GetIsRunning() returns false should then exit. Not required for finite tasks
+	@(deprecated = "use GetIsShutdownRequested() instead")
+	GetIsRunning :: proc(ts: ^TaskScheduler) -> b32 ---
+
+	// for !GetIsShutdownRequested(ts) {} can be used in tasks which loop, to check if enkiTS has been requested to shutdown.
 	// If GetIsShutdownRequested() returns true should then exit. Not required for finite tasks
 	// Safe to use with WaitforAllAndShutdown() where this will be set
 	// Not safe to use with WaitforAll(), use GetIsWaitforAllCalled() instead.
-	GetIsShutdownRequested :: proc(ts: ^TaskScheduler) -> c.int ---
+	GetIsShutdownRequested :: proc(ts: ^TaskScheduler) -> b32 ---
 
-	// while( !enkiGetIsWaitforAllCalled() ) {} can be used in tasks which loop, to check if enkiWaitforAll() has been called.
-	// If enkiGetIsWaitforAllCalled() returns false should then exit. Not required for finite tasks
-	// This is intended to be used with code which calls enkiWaitforAll().
-	// This is also set when the task manager is shutting down, so no need to have an additional check for enkiGetIsShutdownRequested()
-	GetIsWaitforAllCalled :: proc(ts: ^TaskScheduler) -> c.int ---
+	// for !GetIsWaitforAllCalled() {} can be used in tasks which loop, to check if WaitforAll() has been called.
+	// If GetIsWaitforAllCalled() returns false should then exit. Not required for finite tasks
+	// This is intended to be used with code which calls WaitforAll().
+	// This is also set when the task manager is shutting down, so no need to have an additional check for GetIsShutdownRequested()
+	GetIsWaitforAllCalled :: proc(ts: ^TaskScheduler) -> b32 ---
 
 	// Initialize task scheduler - will create GetNumHardwareThreads()-1 threads, which is
 	// sufficient to fill the system when including the main thread.
@@ -146,14 +140,14 @@ foreign enki {
 	// Returns the number of threads created for running tasks + number of external threads
 	// plus 1 to account for the thread used to initialize the task scheduler.
 	// Equivalent to config values: numTaskThreadsToCreate + numExternalTaskThreads + 1.
-	// It is guaranteed that enkiGetThreadNum() < enkiGetNumTaskThreads()
+	// It is guaranteed that GetThreadNum() < GetNumTaskThreads()
 	GetNumTaskThreads :: proc(ts: ^TaskScheduler) -> u32 ---
 
 	// Returns the current task threadNum.
 	// Will return 0 for thread which initialized the task scheduler,
-	// and ENKI_NO_THREAD_NUM for all other non-enkiTS threads which have not been registered ( see enkiRegisterExternalTaskThread() ),
-	// and < enkiGetNumTaskThreads() for all registered and internal enkiTS threads.
-	// It is guaranteed that enkiGetThreadNum() < enkiGetNumTaskThreads() unless it is ENKI_NO_THREAD_NUM
+	// and ENKI_NO_THREAD_NUM for all other non-enkiTS threads which have not been registered ( see RegisterExternalTaskThread() ),
+	// and < GetNumTaskThreads() for all registered and internal enkiTS threads.
+	// It is guaranteed that GetThreadNum() < GetNumTaskThreads() unless it is ENKI_NO_THREAD_NUM
 	GetThreadNum :: proc(ts: ^TaskScheduler) -> u32 ---
 
 	// Call on a thread to register the thread to use the TaskScheduling API.
@@ -162,12 +156,12 @@ foreign enki {
 	// Returns true if successful, false if not.
 	// Can only have numExternalTaskThreads registered at any one time, which must be set
 	// at initialization time.
-	RegisterExternalTaskThread :: proc(ts: ^TaskScheduler) -> c.int ---
+	RegisterExternalTaskThread :: proc(ts: ^TaskScheduler) -> b32 ---
 
-	// As enkiRegisterExternalTaskThread() but explicitly requests a given thread number.
+	// As RegisterExternalTaskThread() but explicitly requests a given thread number.
 	// threadNumToRegister_ must be  >= GetNumFirstExternalTaskThread()
 	// and < ( GetNumFirstExternalTaskThread() + numExternalTaskThreads )
-	RegisterExternalTaskThreadNum :: proc(ts: ^TaskScheduler, threadNumToRegister: u32) -> c.int ---
+	RegisterExternalTaskThreadNum :: proc(ts: ^TaskScheduler, threadNumToRegister: u32) -> b32 ---
 
 	// Call on a thread on which RegisterExternalTaskThread has been called to deregister that thread.
 	DeRegisterExternalTaskThread :: proc(ts: ^TaskScheduler) ---
@@ -213,8 +207,8 @@ foreign enki {
 	AddTaskSet :: proc(ts: ^TaskScheduler, taskSet: ^TaskSet) ---
 
 	// Schedule the task
-	// overwrites args previously set with enkiSetArgsTaskSet
-	// overwrites setSize previously set with enkiSetSetSizeTaskSet
+	// overwrites args previously set with SetArgsTaskSet
+	// overwrites setSize previously set with SetSetSizeTaskSet
 	AddTaskSetArgs :: proc(ts: ^TaskScheduler, taskSet: ^TaskSet, args: rawptr, setSize: u32) ---
 
 	// Schedule the task with a minimum range.
@@ -226,7 +220,7 @@ foreign enki {
 	AddTaskSetMinRange :: proc(ts: ^TaskScheduler, taskSet: ^TaskSet, args: rawptr, setSize: u32, minRange: u32) ---
 
 	// Check if TaskSet is complete. Doesn't wait. Returns 1 if complete, 0 if not.
-	IsTaskSetComplete :: proc(ts: ^TaskScheduler, taskSet: ^TaskSet) -> c.int ---
+	IsTaskSetComplete :: proc(ts: ^TaskScheduler, taskSet: ^TaskSet) -> b32 ---
 
 	// Wait for a given task.
 	// should only be called from thread which created the task scheduler, or within a task
@@ -234,7 +228,7 @@ foreign enki {
 	// Only wait for child tasks of the current task otherwise a deadlock could occur.
 	WaitForTaskSet :: proc(ts: ^TaskScheduler, taskSet: ^TaskSet) ---
 
-	// enkiWaitForTaskSetPriority as enkiWaitForTaskSet but only runs other tasks with priority <= maxPriority_
+	// WaitForTaskSetPriority as WaitForTaskSet but only runs other tasks with priority <= maxPriority_
 	// Only wait for child tasks of the current task otherwise a deadlock could occur.
 	WaitForTaskSetPriority :: proc(ts: ^TaskScheduler, taskSet: ^TaskSet, maxPriority: c.int) ---
 
@@ -245,10 +239,10 @@ foreign enki {
 	// Delete a pinned task.
 	DeletePinnedTask :: proc(ts: ^TaskScheduler, pinnedTask: ^PinnedTask) ---
 
-	// Get task parameters via enkiParamsTaskSet
+	// Get task parameters via ParamsTaskSet
 	GetParamsPinnedTask :: proc(task: ^PinnedTask) -> ParamsPinnedTask ---
 
-	// Set task parameters via enkiParamsTaskSet
+	// Set task parameters via ParamsTaskSet
 	SetParamsPinnedTask :: proc(task: ^PinnedTask, params: ParamsPinnedTask) ---
 
 	// Set PinnedTask ( 0 to ENKITS_TASK_PRIORITIES_NUM-1, where 0 is highest)
@@ -263,15 +257,15 @@ foreign enki {
 
 	// Schedule a pinned task
 	// Pinned tasks can be added from any thread
-	// overwrites args previously set with enkiSetArgsPinnedTask
+	// overwrites args previously set with SetArgsPinnedTask
 	AddPinnedTaskArgs :: proc(ts: ^TaskScheduler, task: ^PinnedTask, args: rawptr) ---
 
-	// This function will run any enkiPinnedTask* for current thread, but not run other
+	// This function will run any PinnedTask for current thread, but not run other
 	// Main thread should call this or use a wait to ensure its tasks are run.
 	RunPinnedTasks :: proc(ts: ^TaskScheduler) ---
 
-	// Check if enkiPinnedTask is complete. Doesn't wait. Returns 1 if complete, 0 if not.
-	IsPinnedTaskComplete :: proc(ts: ^TaskScheduler, task: ^PinnedTask) -> c.int ---
+	// Check if PinnedTask is complete. Doesn't wait. Returns true if complete, false if not.
+	IsPinnedTaskComplete :: proc(ts: ^TaskScheduler, task: ^PinnedTask) -> b32 ---
 
 	// Wait for a given pinned task.
 	// should only be called from thread which created the task scheduler, or within a task
@@ -279,7 +273,7 @@ foreign enki {
 	// Only wait for child tasks of the current task otherwise a deadlock could occur.
 	WaitForPinnedTask :: proc(ts: ^TaskScheduler, task: ^PinnedTask) ---
 
-	// enkiWaitForPinnedTaskPriority as enkiWaitForPinnedTask but only runs other tasks with priority <= maxPriority_
+	// WaitForPinnedTaskPriority as WaitForPinnedTask but only runs other tasks with priority <= maxPriority_
 	// Only wait for child tasks of the current task otherwise a deadlock could occur.
 	WaitForPinnedTaskPriority :: proc(ts: ^TaskScheduler, task: ^PinnedTask, maxPriority: c.int) ---
 
@@ -291,7 +285,7 @@ foreign enki {
 	WaitForNewPinnedTasks :: proc(ts: ^TaskScheduler) ---
 
 	/* ----------------------------  Completables  ---------------------------- */
-	// Get a pointer to an Completable from an enkiTaskSet.
+	// Get a pointer to an Completable from an TaskSet.
 	// Do not call DeleteCompletable on the returned pointer.
 	GetCompletableFromTaskSet :: proc(taskSet: ^TaskSet) -> ^Completable ---
 
@@ -299,7 +293,7 @@ foreign enki {
 	// Do not call DeleteCompletable on the returned pointer.
 	GetCompletableFromPinnedTask :: proc(pinnedTask: ^PinnedTask) -> ^Completable ---
 
-	// Get a pointer to an Completable from an PinnedTask.
+	// Get a pointer to an Completable from an CompletionAction.
 	// Do not call DeleteCompletable on the returned pointer.
 	GetCompletableFromCompletionAction :: proc(completionAction: ^CompletionAction) -> ^Completable ---
 
@@ -308,7 +302,7 @@ foreign enki {
 	// Delete with DeleteCompletable
 	CreateCompletable :: proc(ts: ^TaskScheduler) -> ^Completable ---
 
-	// Delete an Completable created with enkiCreateCompletable
+	// Delete an Completable created with CreateCompletable
 	DeleteCompletable :: proc(ts: ^TaskScheduler, completable: ^Completable) ---
 
 	// Wait for a given completable.
@@ -317,7 +311,7 @@ foreign enki {
 	// Only wait for child tasks of the current task otherwise a deadlock could occur.
 	WaitForCompletable :: proc(ts: ^TaskScheduler, task: ^Completable) ---
 
-	// enkiWaitForCompletablePriority as enkiWaitForCompletable but only runs other tasks with priority <= maxPriority_
+	// WaitForCompletablePriority as WaitForCompletable but only runs other tasks with priority <= maxPriority_
 	// Only wait for child tasks of the current task otherwise a deadlock could occur.
 	WaitForCompletablePriority :: proc(ts: ^TaskScheduler, task: ^Completable, maxPriority: c.int) ---
 
@@ -327,7 +321,7 @@ foreign enki {
 	// Call DeleteDependency to delete.
 	CreateDependency :: proc(ts: ^TaskScheduler) -> ^Dependency ---
 
-	// Delete an enkiDependency created with enkiCreateDependency.
+	// Delete an Dependency created with CreateDependency.
 	DeleteDependency :: proc(ts: ^TaskScheduler, dependency: ^Dependency) ---
 
 	// Set a dependency between dependencyTask and taskToRunOnCompletion
@@ -347,9 +341,9 @@ foreign enki {
 	// Delete a CompletionAction.
 	DeleteCompletionAction :: proc(ts: ^TaskScheduler, completionAction: ^CompletionAction) ---
 
-	// Get task parameters via enkiParamsTaskSet
+	// Get task parameters via ParamsTaskSet
 	GetParamsCompletionAction :: proc(completionAction: ^CompletionAction) -> ParamsCompletionAction ---
 
-	// Set task parameters via enkiParamsTaskSet
+	// Set task parameters via ParamsTaskSet
 	SetParamsCompletionAction :: proc(completionAction: ^CompletionAction, params: ParamsCompletionAction) ---
 }

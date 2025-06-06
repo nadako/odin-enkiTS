@@ -1,6 +1,6 @@
 # enkiTS Odin bindings
 
-> For [enkiTS](https://github.com/dougbinks/enkiTS) version `dc7e2c733f694f4550f26367dc2cdafb61b5d1cb`
+> For [enkiTS](https://github.com/dougbinks/enkiTS) version `771a0876f7b1b26a9c9381f476b31b08798583cf`
 
 EnkiTS is a C/C++ library implementing a Task Scheduler for parallel task execution. You can read more about it on its [github page](https://github.com/dougbinks/enkiTS).
 
